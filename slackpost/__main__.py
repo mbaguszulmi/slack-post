@@ -68,19 +68,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not convert @name to <@USERID> mentions",
     )
+    send.add_argument(
+        "--file",
+        "-f",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="attach a file (repeatable). Text in --text becomes the comment",
+    )
+    send.add_argument(
+        "--file-title",
+        help="title for the attached file (default: filename)",
+    )
 
     sub.add_parser("channels", parents=[common], help="list channels visible to the user")
 
     return parser
 
 
-def _read_text(args: argparse.Namespace) -> str:
+def _read_text(args: argparse.Namespace, required: bool = True) -> str:
     if args.text_file:
         if args.text_file == "-":
             return sys.stdin.read()
         return Path(args.text_file).read_text(encoding="utf-8")
     if args.text is None:
-        raise SystemExit("error: one of --text or --text-file is required")
+        if required:
+            raise SystemExit("error: one of --text or --text-file is required")
+        return ""
     return args.text
 
 
@@ -159,7 +173,8 @@ def _resolve_mentions(client: SlackClient, text: str) -> str:
 
 
 def cmd_send(args: argparse.Namespace) -> int:
-    text = _read_text(args)
+    files = list(args.file or [])
+    text = _read_text(args, required=not files)
     client = _client(args)
 
     if not args.no_mentions:
@@ -172,29 +187,60 @@ def cmd_send(args: argparse.Namespace) -> int:
     else:
         channel = client.resolve_channel(args.channel)
 
+    if files and args.reply_broadcast:
+        print(
+            "warning: --reply-broadcast is ignored for file uploads "
+            "(Slack does not support broadcasting file replies)",
+            file=sys.stderr,
+        )
+
     if args.dry_run:
         preview = {
             "channel": channel,
             "channel_arg": args.channel,
             "text": text,
+            "files": files,
             "thread_ts": args.thread_ts,
             "reply_broadcast": args.reply_broadcast,
         }
         print(json.dumps(preview, indent=2))
-        print("dry run: no message sent", file=sys.stderr)
+        print("dry run: nothing sent", file=sys.stderr)
         return EXIT_OK
 
-    result = client.post_message(
-        channel,
-        text,
-        thread_ts=args.thread_ts,
-        reply_broadcast=args.reply_broadcast,
-    )
+    if not files:
+        result = client.post_message(
+            channel,
+            text,
+            thread_ts=args.thread_ts,
+            reply_broadcast=args.reply_broadcast,
+        )
+        if args.as_json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"sent to {channel} at ts={result.get('ts')}")
+        return EXIT_OK
+
+    # File upload path.
+    results = []
+    for index, file_path in enumerate(files):
+        # Attach the comment text to the first file only.
+        comment = text if index == 0 else None
+        results.append(
+            client.upload_file(
+                file_path,
+                channel=channel,
+                thread_ts=args.thread_ts,
+                initial_comment=comment,
+                title=args.file_title,
+            )
+        )
 
     if args.as_json:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(results, indent=2))
     else:
-        print(f"sent to {channel} at ts={result.get('ts')}")
+        for res in results:
+            uploaded = (res.get("files") or [{}])[0]
+            print(f"uploaded {uploaded.get('id', '?')} to {channel}")
     return EXIT_OK
 
 

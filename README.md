@@ -52,6 +52,33 @@ slack-post send -c '#general' -t 'hey @Abhijeet please review'
 slack-post send -c '#general' -t 'test' --dry-run
 ```
 
+### File attachments
+
+Attach one or more files (images, video, text, PDFs - anything) with
+`--file`/`-f` (repeatable). The `--text` becomes the message that introduces
+the file:
+
+```bash
+# single file
+slack-post send -c '#general' -t 'here is the report' -f report.pdf
+
+# multiple files (text is attached to the first)
+slack-post send -c '#general' -t 'two files' -f chart.png -f data.csv
+
+# attach inside a thread
+slack-post send -c '#general' -t 'in thread' -f log.txt --thread-ts 1792...
+
+# custom title
+slack-post send -c '#general' -f photo.jpg --file-title 'Team photo'
+```
+
+The text/comment is optional when attaching a file. Uses Slack's current
+upload flow (`files.getUploadURLExternal` -> POST bytes ->
+`files.completeUploadExternal`), since `files.upload` is deprecated.
+
+Note: `--reply-broadcast` is ignored for file uploads - Slack has no
+"also send file reply to channel" option.
+
 ### Mentions
 
 Write `@Name` normally and `slack-post` resolves it to Slack's `<@USERID>`

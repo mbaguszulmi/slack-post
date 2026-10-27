@@ -14,7 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from .creds import Credentials
 
@@ -201,6 +202,69 @@ class SlackClient:
         if not channel_id:
             raise SlackError("channel_not_found", method="conversations.open", detail=user_id)
         return channel_id
+
+    def upload_file(
+        self,
+        path: Union[str, Path],
+        *,
+        channel: Optional[str] = None,
+        thread_ts: Optional[str] = None,
+        initial_comment: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upload a file and (optionally) share it in a channel.
+
+        Slack deprecated ``files.upload``; the current flow is:
+
+        1. ``files.getUploadURLExternal`` -> upload_url + file_id
+        2. POST the raw bytes to that URL
+        3. ``files.completeUploadExternal`` -> shares it
+        """
+        path = Path(path)
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise SlackError("file_not_found", method="files.upload", detail=str(exc)) from exc
+
+        filename = path.name
+        ticket = self.call(
+            "files.getUploadURLExternal",
+            {"filename": filename, "length": len(data)},
+        )
+        upload_url = ticket.get("upload_url")
+        file_id = ticket.get("file_id")
+        if not upload_url or not file_id:
+            raise SlackError("invalid_upload_ticket", method="files.getUploadURLExternal")
+
+        # Step 2: raw POST.  Slack accepts the file as the request body.
+        request = urllib.request.Request(
+            upload_url,
+            data=data,
+            method="POST",
+            headers={"User-Agent": self._user_agent},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+                if resp.status != 200:
+                    raise SlackError(
+                        f"upload_http_{resp.status}", method="files.upload"
+                    )
+        except urllib.error.HTTPError as exc:
+            raise SlackError(f"upload_http_{exc.code}", method="files.upload") from exc
+        except urllib.error.URLError as exc:
+            raise SlackError("network_error", method="files.upload", detail=str(exc.reason)) from exc
+
+        # Step 3: finalise and share.
+        params: Dict[str, Any] = {
+            "files": json.dumps([{"id": file_id, "title": title or filename}])
+        }
+        if channel:
+            params["channel_id"] = channel
+        if thread_ts:
+            params["thread_ts"] = thread_ts
+        if initial_comment:
+            params["initial_comment"] = initial_comment
+        return self.call("files.completeUploadExternal", params)
 
     def post_message(
         self,
