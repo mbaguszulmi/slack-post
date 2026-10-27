@@ -99,5 +99,51 @@ class UploadFileTests(unittest.TestCase):
         self.assertEqual(seen["thread_ts"], "123.456")
 
 
+class UploadFilesTests(unittest.TestCase):
+    def _write(self, data):
+        import tempfile
+        from pathlib import Path
+        f = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        f.write(data)
+        f.close()
+        return Path(f.name)
+
+    def test_multiple_files_share_one_message(self):
+        a = self._write(b"aaa")
+        b = self._write(b"bbb")
+        client = make_client()
+        completed = []
+
+        def fake_call(method, params=None):
+            if method == "files.getUploadURLExternal":
+                return {
+                    "ok": True,
+                    "upload_url": "https://x/u",
+                    "file_id": "F" + str(len(completed)),
+                }
+            if method == "files.completeUploadExternal":
+                completed.append(json.loads(params["files"]))
+                return {"ok": True, "files": completed[-1]}
+            raise AssertionError(method)
+
+        resp = mock.MagicMock()
+        resp.status = 200
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = lambda *a: None
+
+        with mock.patch.object(client, "call", side_effect=fake_call), \
+             mock.patch("urllib.request.urlopen", return_value=resp):
+            result = client.upload_files([a, b], channel="C1", initial_comment="two")
+
+        # Exactly ONE completeUploadExternal call carrying BOTH files.
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(len(completed[0]), 2)
+        self.assertEqual(len(result["files"]), 2)
+
+    def test_empty_list_rejected(self):
+        with self.assertRaises(ValueError):
+            make_client().upload_files([])
+
+
 if __name__ == "__main__":
     unittest.main()

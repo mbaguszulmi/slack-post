@@ -203,22 +203,11 @@ class SlackClient:
             raise SlackError("channel_not_found", method="conversations.open", detail=user_id)
         return channel_id
 
-    def upload_file(
-        self,
-        path: Union[str, Path],
-        *,
-        channel: Optional[str] = None,
-        thread_ts: Optional[str] = None,
-        initial_comment: Optional[str] = None,
-        title: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Upload a file and (optionally) share it in a channel.
+    def _stage_file(self, path: Union[str, Path]) -> Dict[str, str]:
+        """Upload bytes to Slack and return ``{"id": ..., "title": ...}``.
 
-        Slack deprecated ``files.upload``; the current flow is:
-
-        1. ``files.getUploadURLExternal`` -> upload_url + file_id
-        2. POST the raw bytes to that URL
-        3. ``files.completeUploadExternal`` -> shares it
+        Performs steps 1 and 2 of Slack's upload flow, but does *not* share
+        the file yet - call :meth:`share_files` to finalise.
         """
         path = Path(path)
         try:
@@ -254,10 +243,18 @@ class SlackClient:
         except urllib.error.URLError as exc:
             raise SlackError("network_error", method="files.upload", detail=str(exc.reason)) from exc
 
-        # Step 3: finalise and share.
-        params: Dict[str, Any] = {
-            "files": json.dumps([{"id": file_id, "title": title or filename}])
-        }
+        return {"id": file_id, "title": filename}
+
+    def share_files(
+        self,
+        files: List[Dict[str, str]],
+        *,
+        channel: Optional[str] = None,
+        thread_ts: Optional[str] = None,
+        initial_comment: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Finalise one or more staged uploads into a single message."""
+        params: Dict[str, Any] = {"files": json.dumps(files)}
         if channel:
             params["channel_id"] = channel
         if thread_ts:
@@ -265,6 +262,53 @@ class SlackClient:
         if initial_comment:
             params["initial_comment"] = initial_comment
         return self.call("files.completeUploadExternal", params)
+
+    def upload_files(
+        self,
+        paths: List[Union[str, Path]],
+        *,
+        channel: Optional[str] = None,
+        thread_ts: Optional[str] = None,
+        initial_comment: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upload several files and share them as a **single** message."""
+        if not paths:
+            raise ValueError("paths must not be empty")
+        staged = [self._stage_file(p) for p in paths]
+        if title and len(staged) == 1:
+            staged[0]["title"] = title
+        return self.share_files(
+            staged,
+            channel=channel,
+            thread_ts=thread_ts,
+            initial_comment=initial_comment,
+        )
+
+    def upload_file(
+        self,
+        path: Union[str, Path],
+        *,
+        channel: Optional[str] = None,
+        thread_ts: Optional[str] = None,
+        initial_comment: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upload a single file and (optionally) share it in a channel.
+
+        Slack deprecated ``files.upload``; the current flow is:
+
+        1. ``files.getUploadURLExternal`` -> upload_url + file_id
+        2. POST the raw bytes to that URL
+        3. ``files.completeUploadExternal`` -> shares it
+        """
+        return self.upload_files(
+            [path],
+            channel=channel,
+            thread_ts=thread_ts,
+            initial_comment=initial_comment,
+            title=title,
+        )
 
     def post_message(
         self,

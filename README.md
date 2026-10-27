@@ -56,24 +56,28 @@ slack-post send -c '#general' -t 'test' --dry-run
 
 Attach one or more files (images, video, text, PDFs - anything) with
 `--file`/`-f` (repeatable). The `--text` becomes the message that introduces
-the file:
+the file(s):
 
 ```bash
 # single file
 slack-post send -c '#general' -t 'here is the report' -f report.pdf
 
-# multiple files (text is attached to the first)
+# multiple files -> ONE message with both attachments
 slack-post send -c '#general' -t 'two files' -f chart.png -f data.csv
 
 # attach inside a thread
 slack-post send -c '#general' -t 'in thread' -f log.txt --thread-ts 1792...
 
-# custom title
+# custom title (single file only)
 slack-post send -c '#general' -f photo.jpg --file-title 'Team photo'
 ```
 
-The text/comment is optional when attaching a file. Uses Slack's current
-upload flow (`files.getUploadURLExternal` -> POST bytes ->
+The text/comment is optional when attaching a file. Multiple `--file` flags
+are uploaded and shared as a **single message** (`files.completeUploadExternal`
+accepts an array of file ids), so they appear as one post with several
+attachments rather than several separate posts.
+
+Uses Slack's current upload flow (`files.getUploadURLExternal` -> POST bytes ->
 `files.completeUploadExternal`), since `files.upload` is deprecated.
 
 Note: `--reply-broadcast` is ignored for file uploads - Slack has no

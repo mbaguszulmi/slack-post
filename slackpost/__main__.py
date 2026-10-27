@@ -220,27 +220,22 @@ def cmd_send(args: argparse.Namespace) -> int:
             print(f"sent to {channel} at ts={result.get('ts')}")
         return EXIT_OK
 
-    # File upload path.
-    results = []
-    for index, file_path in enumerate(files):
-        # Attach the comment text to the first file only.
-        comment = text if index == 0 else None
-        results.append(
-            client.upload_file(
-                file_path,
-                channel=channel,
-                thread_ts=args.thread_ts,
-                initial_comment=comment,
-                title=args.file_title,
-            )
-        )
+    # File upload path: all files share ONE message.
+    result = client.upload_files(
+        files,
+        channel=channel,
+        thread_ts=args.thread_ts,
+        initial_comment=text or None,
+        title=args.file_title,
+    )
 
     if args.as_json:
-        print(json.dumps(results, indent=2))
+        print(json.dumps(result, indent=2))
     else:
-        for res in results:
-            uploaded = (res.get("files") or [{}])[0]
-            print(f"uploaded {uploaded.get('id', '?')} to {channel}")
+        uploaded = result.get("files") or []
+        names = ", ".join(f.get("id", "?") for f in uploaded) or "?"
+        plural = "file" if len(uploaded) == 1 else "files"
+        print(f"uploaded {len(uploaded)} {plural} to {channel}: {names}")
     return EXIT_OK
 
 
